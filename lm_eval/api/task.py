@@ -1657,13 +1657,8 @@ class ConfigurableTask(Task):
         elif self.OUTPUT_TYPE == "generate_until":
             gold = self.doc_to_target(doc)
             result = results[0]
-            if self.config.doc_to_choice is not None:
-                # If you set doc_to_choice,
-                # it assumes that doc_to_target returns a number.
-                choices = self.doc_to_choice(doc)
-                gold = choices[gold]
             # we expect multiple_targets to be a list.
-            elif self.multiple_target:
+            if self.multiple_target:
                 gold = list(gold)
             # TODO: handle this better
             elif type(gold) is not type(result) and not (
