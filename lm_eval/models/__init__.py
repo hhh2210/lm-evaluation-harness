@@ -4,7 +4,7 @@
 # Define model mappings for lazy registration
 MODEL_MAPPING = {
     "anthropic-completions": "lm_eval.models.anthropic_llms:AnthropicLM",
-    "anthropic-chat": "lm_eval.models.anthropic_llms:AnthropicChatLM", 
+    "anthropic-chat": "lm_eval.models.anthropic_llms:AnthropicChatLM",
     "anthropic-chat-completions": "lm_eval.models.anthropic_llms:AnthropicCompletionsLM",
     "local-completions": "lm_eval.models.openai_completions:LocalCompletionsAPI",
     "local-chat-completions": "lm_eval.models.openai_completions:LocalChatCompletion",
@@ -32,16 +32,18 @@ MODEL_MAPPING = {
     "vllm-vlm": "lm_eval.models.vllm_vlms:VLLM_VLM",
 }
 
+
 # Register all models lazily
 def _register_all_models():
     """Register all known models lazily in the registry."""
-    from lm_eval.api.registryv2 import model_registry
-    
+    from lm_eval.api.registry import model_registry
+
     for name, path in MODEL_MAPPING.items():
         # Only register if not already present (avoids conflicts when modules are imported)
         if name not in model_registry:
             # Call register with the lazy parameter, returns a decorator
             model_registry.register(name, lazy=path)(None)
+
 
 # Call registration on module import
 _register_all_models()

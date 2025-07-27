@@ -1,7 +1,7 @@
 from collections import Counter
 
 from lm_eval.api.filter import Filter
-from lm_eval.api.registryv2 import register_filter
+from lm_eval.api.registry import register_filter
 
 
 # TODO: implement "arg_max" filter. either it should take in an arbitrary "scoring"/reward function

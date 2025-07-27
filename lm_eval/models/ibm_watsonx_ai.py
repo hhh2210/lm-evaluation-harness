@@ -3,14 +3,14 @@ import json
 import logging
 import os
 import warnings
-from functools import lru_cache
+from functools import cache
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Type, cast
 
 from tqdm import tqdm
 
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
-from lm_eval.api.registryv2 import register_model
+from lm_eval.api.registry import register_model
 from lm_eval.models.api_models import JsonChatStr
 from lm_eval.utils import simple_parse_args_string
 
@@ -69,7 +69,7 @@ def _verify_credentials(creds: dict) -> None:
         raise ValueError(error_msg)
 
 
-@lru_cache(maxsize=None)
+@cache
 def get_watsonx_credentials() -> Dict[str, str]:
     """
     Retrieves Watsonx API credentials from environmental variables.

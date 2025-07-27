@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from lm_eval import utils
-from lm_eval.api.registryv2 import ALL_TASKS
+from lm_eval.api.registry import ALL_TASKS
 
 
 seq2seq_models = ["google/flan-t5-small"]

@@ -1,46 +1,23 @@
 from __future__ import annotations
 
-
-"""lm_eval.registry — **lazy‑aware** refactor (draft)
-
-One generic :class:`Registry` plus a small :class:`MetricSpec` dataclass replace
-all ad‑hoc ``*_REGISTRY`` dictionaries.  New in this revision:
-
-* **Lazy placeholders** (`"pkg.mod:Obj"` strings or *EntryPoint* objects)
-  are stored until the first ``get()`` call, deferring heavy imports.
-* Same decorator / function API; just add ``lazy="pkg.mod:Obj"`` or pass an
-  *EntryPoint* instead of a class/function.
-* Thread‑safe, type‑checked, backwards‑compatible stubs for the legacy
-  globals (``MODEL_REGISTRY``, etc.).
-* ``freeze_all()`` leaves first‑use materialisation intact but blocks new
-  registrations, preserving determinism after bootstrap.
-"""
-
 import importlib
 import inspect
 import threading
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
 from typing import (
     Any,
     Callable,
-    Dict,
     Generic,
-    Iterable,
-    List,
-    Mapping,
-    MutableMapping,
-    Optional,
-    Type,
     TypeVar,
-    Union,
 )
 
 
 try:  # Python≥3.10
-    import importlib.metadata as md  # noqa: N812 (we keep the alias short)
-except ImportError:  # pragma: no cover -fallback for 3.8/3.9 runtimes
+    import importlib.metadata as md
+except ImportError:  # pragma: no cover - fallback for 3.8/3.9 runtimes
     import importlib_metadata as md  # type: ignore
 
 __all__ = [
@@ -89,24 +66,24 @@ T = TypeVar("T")
 
 
 class Registry(Generic[T]):
-    """Name→object mapping with decorator helpers and **lazy import** support."""
+    """Name -> object mapping with decorator helpers and **lazy import** support."""
 
     #: The underlying mutable mapping (might turn into MappingProxy on freeze)
-    _objects: MutableMapping[str, Union[T, str, md.EntryPoint]]
+    _objects: MutableMapping[str, T | str | md.EntryPoint]
 
     def __init__(
         self,
         name: str,
         *,
-        base_cls: Type[T] | None = None,
-        store: MutableMapping[str, Union[T, str, md.EntryPoint]] | None = None,
+        base_cls: type[T] | None = None,
+        store: MutableMapping[str, T | str | md.EntryPoint] | None = None,
         validator: Callable[[T], bool] | None = None,
     ) -> None:
         self._name: str = name
-        self._base_cls: Type[T] | None = base_cls
+        self._base_cls: type[T] | None = base_cls
         self._objects = store if store is not None else {}
-        self._metadata: Dict[
-            str, Dict[str, Any]
+        self._metadata: dict[
+            str, dict[str, Any]
         ] = {}  # Store metadata for each registered item
         self._validator = validator  # Custom validation function
         self._lock = threading.RLock()
@@ -119,7 +96,7 @@ class Registry(Generic[T]):
         self,
         *aliases: str,
         lazy: str | md.EntryPoint | None = None,
-        metadata: Dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Callable[[T], T]:
         """``@registry.register("foo")`` **or** ``registry.register("foo", lazy="a.b:C")``.
 
@@ -128,7 +105,7 @@ class Registry(Generic[T]):
           object out and pass ``lazy=``.
         """
 
-        def _do_register(target: Union[T, str, md.EntryPoint]) -> None:
+        def _do_register(target: T | str | md.EntryPoint) -> None:
             if not aliases:
                 _aliases = (getattr(target, "__name__", str(target)),)
             else:
@@ -175,8 +152,8 @@ class Registry(Generic[T]):
 
     def register_bulk(
         self,
-        items: Dict[str, Union[T, str, md.EntryPoint]],
-        metadata: Dict[str, Dict[str, Any]] | None = None,
+        items: dict[str, T | str | md.EntryPoint],
+        metadata: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Register multiple items at once.
 
@@ -219,7 +196,7 @@ class Registry(Generic[T]):
     # ------------------------------------------------------------------
 
     @lru_cache(maxsize=256)  # Bounded cache to prevent memory growth
-    def _materialise(self, target: Union[T, str, md.EntryPoint]) -> T:  # noqa: ANN401 -dynamic return
+    def _materialise(self, target: T | str | md.EntryPoint) -> T:
         """Import *target* if it is a dotted‑path string or EntryPoint."""
         if isinstance(target, str):
             mod, _, obj_name = target.partition(":")
@@ -243,11 +220,15 @@ class Registry(Generic[T]):
                     f"{', '.join(self._objects)}"
                 ) from exc
 
-            concrete: T = self._materialise(target)
-
-            # First‑touch: swap placeholder with concrete obj for future calls
-            if concrete is not target:
-                self._objects[alias] = concrete
+            # Only materialize if it's a string or EntryPoint (lazy placeholder)
+            if isinstance(target, (str, md.EntryPoint)):
+                concrete: T = self._materialise(target)
+                # First‑touch: swap placeholder with concrete obj for future calls
+                if concrete is not target:
+                    self._objects[alias] = concrete
+            else:
+                # Already materialized, just return it
+                concrete = target
 
             # Late type check (for placeholders)
             if self._base_cls is not None and not issubclass(concrete, self._base_cls):  # type: ignore[arg-type]
@@ -267,16 +248,16 @@ class Registry(Generic[T]):
 
     # Mapping / dunder helpers -------------------------------------------------
 
-    def __getitem__(self, alias: str) -> T:  # noqa: DunderImplemented
+    def __getitem__(self, alias: str) -> T:  # noqa
         return self.get(alias)
 
-    def __iter__(self):  # noqa: DunderImplemented
+    def __iter__(self):  # noqa
         return iter(self._objects)
 
-    def __len__(self) -> int:  # noqa: DunderImplemented
+    def __len__(self) -> int:  # noqa
         return len(self._objects)
 
-    def items(self):  # noqa: DunderImplemented
+    def items(self):  # noqa
         return self._objects.items()
 
     # Introspection -----------------------------------------------------------
@@ -299,7 +280,7 @@ class Registry(Generic[T]):
             # AttributeError: object lacks expected attributes
             return None
 
-    def get_metadata(self, alias: str) -> Dict[str, Any] | None:
+    def get_metadata(self, alias: str) -> dict[str, Any] | None:
         """Get metadata for a registered item."""
         with self._lock:
             return self._metadata.get(alias)
@@ -335,18 +316,18 @@ class MetricSpec:
     compute: Callable[[Any, Any], Any]
     aggregate: Callable[[Iterable[Any]], Mapping[str, float]]
     higher_is_better: bool = True
-    output_type: Optional[str] = None  # e.g., "probability", "string", "numeric"
-    requires: Optional[List[str]] = None  # Dependencies on other metrics/data
+    output_type: str | None = None  # e.g., "probability", "string", "numeric"
+    requires: list[str] | None = None  # Dependencies on other metrics/data
 
 
 # ────────────────────────────────────────────────────────────────────────
 # Concrete registries used by lm_eval
 # ────────────────────────────────────────────────────────────────────────
 
-from lm_eval.api.model import LM  # noqa: E402 (local import by design)
+from lm_eval.api.model import LM  # noqa: E402
 
 
-model_registry: Registry[Type[LM]] = Registry("model", base_cls=LM)
+model_registry: Registry[type[LM]] = Registry("model", base_cls=LM)
 task_registry: Registry[Callable[..., Any]] = Registry("task")
 metric_registry: Registry[MetricSpec] = Registry("metric")
 metric_agg_registry: Registry[Callable[[Iterable[Any]], Mapping[str, float]]] = (
@@ -367,7 +348,7 @@ DEFAULT_METRIC_REGISTRY = {
 }
 
 # Aggregation registry (will be populated by register_aggregation)
-AGGREGATION_REGISTRY: Dict[str, Callable] = {}
+AGGREGATION_REGISTRY: dict[str, Callable] = {}
 
 # ────────────────────────────────────────────────────────────────────────
 # Public helper aliases (legacy API)
@@ -407,10 +388,11 @@ def register_metric(**kwargs):
         # Also handle aggregation if specified
         if "aggregation" in kwargs:
             agg_name = kwargs["aggregation"]
-            if agg_name in metric_agg_registry._objects:
+            # Try to get aggregation from AGGREGATION_REGISTRY
+            if agg_name in AGGREGATION_REGISTRY:
                 spec = MetricSpec(
                     compute=fn,
-                    aggregate=metric_agg_registry._objects[agg_name],
+                    aggregate=AGGREGATION_REGISTRY[agg_name],
                     higher_is_better=kwargs.get("higher_is_better", True),
                     output_type=kwargs.get("output_type"),
                     requires=kwargs.get("requires"),
@@ -457,7 +439,25 @@ def get_metric(name: str, hf_evaluate_metric=False):
 
 
 register_metric_aggregation = metric_agg_registry.register
-get_metric_aggregation = metric_agg_registry.get
+
+
+def get_metric_aggregation(metric_name: str):
+    """Get the aggregation function for a metric."""
+    # First try to get from metric registry (for metrics registered with aggregation)
+    if metric_name in metric_registry._objects:
+        metric_spec = metric_registry._objects[metric_name]
+        if isinstance(metric_spec, MetricSpec) and metric_spec.aggregate:
+            return metric_spec.aggregate
+
+    # Fall back to metric_agg_registry (for standalone aggregations)
+    if metric_name in metric_agg_registry._objects:
+        return metric_agg_registry._objects[metric_name]
+
+    # If not found, raise error
+    raise KeyError(
+        f"Unknown metric aggregation '{metric_name}'. Available: {list(AGGREGATION_REGISTRY.keys())}"
+    )
+
 
 register_higher_is_better = higher_is_better_registry.register
 is_higher_better = higher_is_better_registry.get
@@ -479,7 +479,7 @@ def register_aggregation(name: str):
     return decorate
 
 
-def get_aggregation(name: str) -> Callable[[], Dict[str, Callable]]:
+def get_aggregation(name: str) -> Callable[[], dict[str, Callable]]:
     try:
         return AGGREGATION_REGISTRY[name]
     except KeyError:
@@ -526,7 +526,7 @@ def freeze_all() -> None:  # pragma: no cover
 # Backwards‑compatibility read‑only globals
 # ────────────────────────────────────────────────────────────────────────
 
-MODEL_REGISTRY: Mapping[str, Type[LM]] = MappingProxyType(model_registry._objects)  # type: ignore[attr-defined]
+MODEL_REGISTRY: Mapping[str, type[LM]] = MappingProxyType(model_registry._objects)  # type: ignore[attr-defined]
 TASK_REGISTRY: Mapping[str, Callable[..., Any]] = MappingProxyType(
     task_registry._objects
 )  # type: ignore[attr-defined]

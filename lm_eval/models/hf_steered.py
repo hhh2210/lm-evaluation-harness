@@ -1,14 +1,15 @@
+from collections.abc import Generator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Generator, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 from peft.peft_model import PeftModel
 from torch import Tensor, nn
 from transformers import PreTrainedModel
 
-from lm_eval.api.registryv2 import register_model
+from lm_eval.api.registry import register_model
 from lm_eval.models.huggingface import HFLM
 
 

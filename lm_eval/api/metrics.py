@@ -4,13 +4,13 @@ import os
 import random
 import re
 import string
-from collections.abc import Iterable
-from typing import Callable, List, Optional, Sequence, TypeVar
+from collections.abc import Iterable, Sequence
+from typing import Callable, List, Optional, TypeVar
 
 import numpy as np
 import sacrebleu
 
-from lm_eval.api.registryv2 import register_aggregation, register_metric
+from lm_eval.api.registry import register_aggregation, register_metric
 
 
 T = TypeVar("T")

@@ -6,7 +6,7 @@ from requests.exceptions import RequestException
 from tqdm import tqdm
 
 from lm_eval.api.model import LM
-from lm_eval.api.registryv2 import register_model
+from lm_eval.api.registry import register_model
 
 
 logger = logging.getLogger(__name__)

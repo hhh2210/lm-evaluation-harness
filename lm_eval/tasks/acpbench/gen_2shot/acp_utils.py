@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
 
-from lm_eval.api.registryv2 import register_filter
+from lm_eval.api.registry import register_filter
 from lm_eval.filters.extraction import RegexFilter
 
 
@@ -81,7 +81,7 @@ class ACPBench_Visitor(Visitor):
             self.indexes = None
 
 
-class ACPGrammarParser(object):
+class ACPGrammarParser:
     def __init__(self, task) -> None:
         self.task = task
         with open(GRAMMAR_FILE) as f:
@@ -556,8 +556,8 @@ class STRIPS:
         return set([fix_name(str(x)) for x in ret])
 
     def PDDL_replace_init_pddl_parser(self, s):
-        d = DomainParser()(open(self.domain_file, "r").read().lower())
-        p = ProblemParser()(open(self.problem_file, "r").read().lower())
+        d = DomainParser()(open(self.domain_file).read().lower())
+        p = ProblemParser()(open(self.problem_file).read().lower())
 
         new_state = get_atoms_pddl(d, p, s | self.get_static())
 
