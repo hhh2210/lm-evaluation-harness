@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
 
-from lm_eval.api.registry import register_filter
+from lm_eval.api.registryv2 import register_filter
 from lm_eval.filters.extraction import RegexFilter
 
 

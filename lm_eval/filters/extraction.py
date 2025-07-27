@@ -3,7 +3,7 @@ import sys
 import unicodedata
 
 from lm_eval.api.filter import Filter
-from lm_eval.api.registry import register_filter
+from lm_eval.api.registryv2 import register_filter
 
 
 @register_filter("regex")

@@ -7,7 +7,7 @@ from optimum.intel import OVModelForCausalLM
 from transformers import AutoTokenizer
 
 from lm_eval import evaluator
-from lm_eval.api.registry import get_model
+from lm_eval.api.registryv2 import get_model
 
 
 SUPPORTED_ARCHITECTURES_TASKS = {

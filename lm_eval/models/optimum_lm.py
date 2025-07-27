@@ -3,7 +3,7 @@ import logging
 from importlib.util import find_spec
 from pathlib import Path
 
-from lm_eval.api.registry import register_model
+from lm_eval.api.registryv2 import register_model
 from lm_eval.models.huggingface import HFLM
 
 

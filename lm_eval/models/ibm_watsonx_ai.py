@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
-from lm_eval.api.registry import register_model
+from lm_eval.api.registryv2 import register_model
 from lm_eval.models.api_models import JsonChatStr
 from lm_eval.utils import simple_parse_args_string
 

@@ -10,7 +10,7 @@ from typing import Callable, List, Optional, Sequence, TypeVar
 import numpy as np
 import sacrebleu
 
-from lm_eval.api.registry import register_aggregation, register_metric
+from lm_eval.api.registryv2 import register_aggregation, register_metric
 
 
 T = TypeVar("T")

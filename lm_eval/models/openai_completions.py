@@ -4,7 +4,7 @@ from functools import cached_property
 from operator import itemgetter
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from lm_eval.api.registry import register_model
+from lm_eval.api.registryv2 import register_model
 from lm_eval.models.api_models import TemplateAPI
 from lm_eval.models.utils import handle_stop_sequences
 

@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import TemplateLM
-from lm_eval.api.registry import register_model
+from lm_eval.api.registryv2 import register_model
 from lm_eval.models.utils import (
     Collator,
     configure_pad_token,
@@ -41,7 +41,7 @@ try:
     if parse_version(version("vllm")) >= parse_version("0.8.3"):
         from vllm.entrypoints.chat_utils import resolve_hf_chat_template
 except ModuleNotFoundError:
-    pass
+    print("njklsfnljnlsjnjlksnljnfvljnflsdnlksfnlkvnlksfvnlsfd")
 
 if TYPE_CHECKING:
     pass

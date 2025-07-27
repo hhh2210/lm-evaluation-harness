@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 import lm_eval.api.metrics
-import lm_eval.api.registry
+import lm_eval.api.registryv2
 import lm_eval.api.task
 import lm_eval.models
 from lm_eval.caching.cache import delete_cache
@@ -227,7 +227,7 @@ def simple_evaluate(
             eval_logger.info(
                 f"Initializing {model} model, with arguments: {model_args}"
             )
-            lm = lm_eval.api.registry.get_model(model).create_from_arg_obj(
+            lm = lm_eval.api.registryv2.get_model(model).create_from_arg_obj(
                 model_args,
                 {
                     "batch_size": batch_size,
@@ -242,7 +242,7 @@ def simple_evaluate(
                     f"Initializing {model} model, with arguments: {simple_parse_args_string(model_args)}"
                 )
             )
-            lm = lm_eval.api.registry.get_model(model).create_from_arg_string(
+            lm = lm_eval.api.registryv2.get_model(model).create_from_arg_string(
                 model_args,
                 {
                     "batch_size": batch_size,

@@ -7,7 +7,7 @@ from more_itertools import distribute
 from tqdm import tqdm
 
 from lm_eval.api.instance import Instance
-from lm_eval.api.registry import register_model
+from lm_eval.api.registryv2 import register_model
 from lm_eval.models.utils import (
     Collator,
     handle_stop_sequences,

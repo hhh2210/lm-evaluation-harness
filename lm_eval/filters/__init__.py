@@ -2,7 +2,7 @@ from functools import partial
 from typing import List
 
 from lm_eval.api.filter import FilterEnsemble
-from lm_eval.api.registry import get_filter
+from lm_eval.api.registryv2 import get_filter
 
 from . import custom, extraction, selection, transformation
 

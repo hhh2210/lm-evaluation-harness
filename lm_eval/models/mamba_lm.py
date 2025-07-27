@@ -3,7 +3,7 @@ from typing import Optional, Union
 import torch
 
 import lm_eval.models.utils
-from lm_eval.api.registry import register_model
+from lm_eval.api.registryv2 import register_model
 from lm_eval.models.huggingface import HFLM
 
 
