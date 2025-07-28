@@ -114,6 +114,74 @@ class Registry(Generic[T]):
         """Register lazy: registry.register("foo", lazy="a.b:C")(None)."""
         ...
 
+    def _resolve_aliases(
+        self, target: T | str | md.EntryPoint, aliases: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Resolve aliases for registration."""
+        if not aliases:
+            return (getattr(target, "__name__", str(target)),)
+        return aliases
+
+    def _check_and_store(
+        self,
+        alias: str,
+        target: T | str | md.EntryPoint,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        """Check constraints and store the target with optional metadata.
+
+        Collision policy:
+        1. If alias doesn't exist → store it
+        2. If identical value → silently succeed (idempotent)
+        3. If lazy placeholder + matching concrete class → replace with concrete
+        4. Otherwise → raise ValueError
+
+        Type checking:
+        - Eager for concrete classes at registration time
+        - Deferred for lazy placeholders until materialization
+        """
+        with self._lock:
+            # Case 1: New alias
+            if alias not in self._objects:
+                # Type check concrete classes before storing
+                if self._base_cls is not None and isinstance(target, type):
+                    if not issubclass(target, self._base_cls):  # type: ignore[arg-type]
+                        raise TypeError(
+                            f"{target} must inherit from {self._base_cls} "
+                            f"to be registered as a {self._name}"
+                        )
+                self._objects[alias] = target
+                if metadata:
+                    self._metadata[alias] = metadata
+                return
+
+            existing = self._objects[alias]
+
+            # Case 2: Identical value - idempotent
+            if existing == target:
+                return
+
+            # Case 3: Lazy placeholder being replaced by its concrete class
+            if isinstance(existing, str) and isinstance(target, type):
+                mod_path, _, cls_name = existing.partition(":")
+                if (
+                    cls_name
+                    and hasattr(target, "__module__")
+                    and hasattr(target, "__name__")
+                ):
+                    expected_path = f"{target.__module__}:{target.__name__}"
+                    if existing == expected_path:
+                        self._objects[alias] = target
+                        if metadata:
+                            self._metadata[alias] = metadata
+                        return
+
+            # Case 4: Collision - different values
+            raise ValueError(
+                f"{self._name!r} '{alias}' already registered "
+                f"(existing: {existing}, new: {target})"
+            )
+
     def register(
         self,
         *aliases: str,
@@ -126,62 +194,17 @@ class Registry(Generic[T]):
         * If called as a **plain function** and you want lazy import, leave the
           object out and pass ``lazy=``.
         """
-
-        def _do_register(target: T | str | md.EntryPoint) -> None:
-            if not aliases:
-                _aliases = (getattr(target, "__name__", str(target)),)
-            else:
-                _aliases = aliases
-
-            with self._lock:
-                for alias in _aliases:
-                    if alias in self._objects:
-                        existing = self._objects[alias]
-                        # Allow re-registration only if identical
-                        if existing != target:
-                            # Special case: check if we're trying to register a concrete class
-                            # that matches an existing lazy placeholder
-                            if isinstance(existing, str) and isinstance(target, type):
-                                # Check if the lazy path points to this class
-                                mod_path, _, cls_name = existing.partition(":")
-                                if (
-                                    cls_name
-                                    and hasattr(target, "__module__")
-                                    and hasattr(target, "__name__")
-                                ):
-                                    expected_path = (
-                                        f"{target.__module__}:{target.__name__}"
-                                    )
-                                    if existing == expected_path:
-                                        # This is the concrete version of the lazy placeholder
-                                        self._objects[alias] = target
-                                        continue
-
-                            raise ValueError(
-                                f"{self._name!r} '{alias}' already registered "
-                                f"(existing: {existing}, new: {target})"
-                            )
-                    # Eager type check only when we have a concrete class
-                    if self._base_cls is not None and isinstance(target, type):
-                        if not issubclass(target, self._base_cls):  # type: ignore[arg-type]
-                            raise TypeError(
-                                f"{target} must inherit from {self._base_cls} "
-                                f"to be registered as a {self._name}"
-                            )
-                    self._objects[alias] = target
-                    # Store metadata if provided
-                    if metadata:
-                        self._metadata[alias] = metadata
+        # ─── direct‑call path with lazy placeholder ───
+        if lazy is not None:
+            for alias in self._resolve_aliases(lazy, aliases):
+                self._check_and_store(alias, lazy, metadata)
+            return lambda x: x  # no‑op decorator for accidental use
 
         # ─── decorator path ───
         def decorator(obj: T) -> T:  # type: ignore[valid-type]
-            _do_register(obj)
+            for alias in self._resolve_aliases(obj, aliases):
+                self._check_and_store(alias, obj, metadata)
             return obj
-
-        # ─── direct‑call path with lazy placeholder ───
-        if lazy is not None:
-            _do_register(lazy)
-            return lambda x: x  # no‑op decorator for accidental use
 
         return decorator
 
