@@ -243,7 +243,9 @@ class MetricSpec:
 from lm_eval.api.model import LM  # noqa: E402
 
 
-model_registry: Registry[type[LM]] = Registry("model", base_cls=LM)
+model_registry: Registry[type[LM]] = cast(
+    Registry[type[LM]], Registry("model", base_cls=LM)
+)
 task_registry: Registry[Callable[..., Any]] = Registry("task")
 metric_registry: Registry[MetricSpec] = Registry("metric")
 metric_agg_registry: Registry[Callable[[Iterable[Any]], float]] = Registry(
@@ -266,6 +268,14 @@ get_filter = filter_registry.get
 # Metric helpers need thin wrappers to build MetricSpec ----------------------
 
 
+def _no_aggregation_fn(values: Iterable[Any]) -> float:
+    """Default aggregation that raises NotImplementedError."""
+    raise NotImplementedError(
+        "No aggregation function specified for this metric. "
+        "Please specify 'aggregation' parameter in @register_metric."
+    )
+
+
 def register_metric(**kw):
     name = kw["metric"]
 
@@ -275,7 +285,7 @@ def register_metric(**kw):
             aggregate=(
                 metric_agg_registry.get(kw["aggregation"])
                 if "aggregation" in kw
-                else lambda _: {}
+                else _no_aggregation_fn
             ),
             higher_is_better=kw.get("higher_is_better", True),
             output_type=kw.get("output_type"),
