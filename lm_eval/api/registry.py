@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import importlib
 import inspect
 import threading
@@ -13,7 +14,6 @@ from typing import (
     Callable,
     Generic,
     TypeVar,
-    overload,
 )
 
 
@@ -94,25 +94,25 @@ class Registry(Generic[T]):
     # Registration helpers (decorator or direct call)
     # ------------------------------------------------------------------
 
-    @overload
-    def register(
-        self,
-        *aliases: str,
-        lazy: None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Callable[[T], T]:
-        """Register as decorator: @registry.register("foo")."""
-        ...
-
-    @overload
-    def register(
-        self,
-        *aliases: str,
-        lazy: str | md.EntryPoint,
-        metadata: dict[str, Any] | None = None,
-    ) -> Callable[[Any], Any]:
-        """Register lazy: registry.register("foo", lazy="a.b:C")"""
-        ...
+    # @overload
+    # def register(
+    #     self,
+    #     *aliases: str,
+    #     lazy: None = None,
+    #     metadata: dict[str, Any] | None = None,
+    # ) -> Callable[[T], T]:
+    #     """Register as decorator: @registry.register("foo")."""
+    #     ...
+    #
+    # @overload
+    # def register(
+    #     self,
+    #     *aliases: str,
+    #     lazy: str | md.EntryPoint,
+    #     metadata: dict[str, Any] | None = None,
+    # ) -> Callable[[Any], Any]:
+    #     """Register lazy: registry.register("foo", lazy="a.b:C")"""
+    #     ...
 
     def _resolve_aliases(
         self, target: T | str | md.EntryPoint, aliases: tuple[str, ...]
@@ -188,10 +188,11 @@ class Registry(Generic[T]):
         obj: T | None = None,
         lazy: str | md.EntryPoint | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> object:
+    ):
         if obj and lazy:
             raise ValueError("pass obj *or* lazy")
 
+        @functools.wraps(self.register)
         def _impl(target: T | str | md.EntryPoint):
             for a in aliases or (getattr(target, "__name__", str(target)),):
                 self._check_and_store(a, target, metadata)
@@ -285,14 +286,14 @@ class Registry(Generic[T]):
                     f"{', '.join(self._objects)}"
                 ) from exc
 
-            # Double-check after acquiring lock (may have been materialized by another thread)
+            # Double-check after acquiring a lock (may have been materialized by another thread)
             if not isinstance(target, (str, md.EntryPoint)):
                 return target
 
             # Materialize the lazy placeholder
             concrete: T = self._materialise(target)
 
-            # Swap placeholder with concrete object (with race condition check)
+            # Swap placeholder with a concrete object (with race condition check)
             if concrete is not target:
                 # Final check: another thread might have materialized while we were working
                 current = self._objects.get(alias)
