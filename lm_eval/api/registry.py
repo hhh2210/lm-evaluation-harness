@@ -139,6 +139,24 @@ class Registry(Generic[T]):
                         existing = self._objects[alias]
                         # Allow re-registration only if identical
                         if existing != target:
+                            # Special case: check if we're trying to register a concrete class
+                            # that matches an existing lazy placeholder
+                            if isinstance(existing, str) and isinstance(target, type):
+                                # Check if the lazy path points to this class
+                                mod_path, _, cls_name = existing.partition(":")
+                                if (
+                                    cls_name
+                                    and hasattr(target, "__module__")
+                                    and hasattr(target, "__name__")
+                                ):
+                                    expected_path = (
+                                        f"{target.__module__}:{target.__name__}"
+                                    )
+                                    if existing == expected_path:
+                                        # This is the concrete version of the lazy placeholder
+                                        self._objects[alias] = target
+                                        continue
+
                             raise ValueError(
                                 f"{self._name!r} '{alias}' already registered "
                                 f"(existing: {existing}, new: {target})"
@@ -229,9 +247,16 @@ class Registry(Generic[T]):
             # Materialize the lazy placeholder
             concrete: T = self._materialise(target)
 
-            # Swap placeholder with concrete object
+            # Swap placeholder with concrete object (with race condition check)
             if concrete is not target:
-                self._objects[alias] = concrete
+                # Final check: another thread might have materialized while we were working
+                current = self._objects.get(alias)
+                if isinstance(current, (str, md.EntryPoint)):
+                    # Still a placeholder, safe to replace
+                    self._objects[alias] = concrete
+                else:
+                    # Another thread already materialized it, use their result
+                    concrete = current  # type: ignore[assignment]
 
             # Late type check (for placeholders)
             if self._base_cls is not None and not issubclass(concrete, self._base_cls):  # type: ignore[arg-type]
@@ -304,10 +329,7 @@ class Registry(Generic[T]):
                 raise RuntimeError("Cannot clear a frozen registry")
             self._objects.clear()
             self._metadata.clear()
-            # Clear cache and create new materialise method to avoid stale references
             self._materialise.cache_clear()  # type: ignore[attr-defined]
-            # Replace the method to ensure no lingering references
-            self._materialise = lru_cache(maxsize=256)(self._materialise.__wrapped__)  # type: ignore[attr-defined]
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -376,8 +398,8 @@ def default_metrics_for(output_type: str) -> list[str]:
     return matching_metrics if matching_metrics else []
 
 
-# Aggregation registry (will be populated by register_aggregation)
-AGGREGATION_REGISTRY: dict[str, Callable] = {}
+# Aggregation registry - alias to the canonical registry for backward compatibility
+AGGREGATION_REGISTRY = metric_agg_registry  # The registry itself is dict-like
 
 # ────────────────────────────────────────────────────────────────────────
 # Public helper aliases (legacy API)
@@ -406,9 +428,9 @@ def register_metric(**kwargs):
         aggregate_fn = None
         if "aggregation" in kwargs:
             agg_name = kwargs["aggregation"]
-            if agg_name in AGGREGATION_REGISTRY:
-                aggregate_fn = AGGREGATION_REGISTRY[agg_name]
-            else:
+            try:
+                aggregate_fn = metric_agg_registry.get(agg_name)
+            except KeyError:
                 raise ValueError(f"Unknown aggregation: {agg_name}")
         else:
             # No aggregation specified - use a function that raises NotImplementedError
@@ -492,7 +514,7 @@ def get_metric_aggregation(metric_name: str):
 
     # If not found, raise error
     raise KeyError(
-        f"Unknown metric aggregation '{metric_name}'. Available: {list(AGGREGATION_REGISTRY.keys())}"
+        f"Unknown metric aggregation '{metric_name}'. Available: {list(metric_agg_registry)}"
     )
 
 
@@ -513,21 +535,22 @@ def register_aggregation(name: str):
     )
 
     def decorate(fn):
-        if name in AGGREGATION_REGISTRY:
+        # Use the canonical registry as single source of truth
+        if name in metric_agg_registry:
             raise ValueError(
                 f"aggregation named '{name}' conflicts with existing registered aggregation!"
             )
-        AGGREGATION_REGISTRY[name] = fn
-        # Also register in the new registry for compatibility
         metric_agg_registry.register(name)(fn)
         return fn
 
     return decorate
 
 
-def get_aggregation(name: str) -> Callable[[], dict[str, Callable]] | None:
+def get_aggregation(name: str) -> Callable[[Iterable[Any]], Mapping[str, float]] | None:
+    """@deprecated Use metric_agg_registry.get() instead."""
     try:
-        return AGGREGATION_REGISTRY[name]
+        # Use the canonical registry
+        return metric_agg_registry.get(name)
     except KeyError:
         import logging
 
@@ -569,26 +592,20 @@ def freeze_all() -> None:  # pragma: no cover
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Backwards‑compatibility read‑only globals with mutation warnings
+# Backwards‑compatibility read‑only globals
 # ────────────────────────────────────────────────────────────────────────
 
+# These are direct aliases to the registries themselves, which already implement
+# the Mapping protocol and provide read-only access to users (since _objects is private).
+# This ensures they always reflect the current state of the registries, including
+# items registered after module import.
+#
+# Note: We use type: ignore because Registry doesn't formally inherit from Mapping,
+# but it implements all required methods (__getitem__, __iter__, __len__, items)
 
-# Note: MappingProxyType cannot be subclassed, so we use dict copies for immutability
-
-
-MODEL_REGISTRY: Mapping[str, LM] = MappingProxyType(dict(model_registry._objects))  # type: ignore[attr-defined]
-TASK_REGISTRY: Mapping[str, Callable[..., Any]] = MappingProxyType(
-    dict(task_registry._objects)
-)  # type: ignore[attr-defined]
-METRIC_REGISTRY: Mapping[str, MetricSpec] = MappingProxyType(
-    dict(metric_registry._objects)
-)  # type: ignore[attr-defined]
-METRIC_AGGREGATION_REGISTRY: Mapping[str, Callable] = MappingProxyType(
-    dict(metric_agg_registry._objects)
-)  # type: ignore[attr-defined]
-HIGHER_IS_BETTER_REGISTRY: Mapping[str, bool] = MappingProxyType(
-    dict(higher_is_better_registry._objects)
-)  # type: ignore[attr-defined]
-FILTER_REGISTRY: Mapping[str, Callable] = MappingProxyType(
-    dict(filter_registry._objects)
-)  # type: ignore[attr-defined]
+MODEL_REGISTRY: Mapping[str, LM] = model_registry  # type: ignore[assignment]
+TASK_REGISTRY: Mapping[str, Callable[..., Any]] = task_registry  # type: ignore[assignment]
+METRIC_REGISTRY: Mapping[str, MetricSpec] = metric_registry  # type: ignore[assignment]
+METRIC_AGGREGATION_REGISTRY: Mapping[str, Callable] = metric_agg_registry  # type: ignore[assignment]
+HIGHER_IS_BETTER_REGISTRY: Mapping[str, bool] = higher_is_better_registry  # type: ignore[assignment]
+FILTER_REGISTRY: Mapping[str, Callable] = filter_registry  # type: ignore[assignment]
