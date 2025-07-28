@@ -3,8 +3,9 @@ from __future__ import annotations
 import importlib
 import inspect
 import threading
+import warnings
 from collections.abc import Iterable, Mapping, MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from types import MappingProxyType
 from typing import (
@@ -12,6 +13,7 @@ from typing import (
     Callable,
     Generic,
     TypeVar,
+    overload,
 )
 
 
@@ -61,6 +63,20 @@ T = TypeVar("T")
 
 
 # ────────────────────────────────────────────────────────────────────────
+# Registry Entry for bundling object + metadata
+# ────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class RegistryEntry(Generic[T]):
+    """Bundle an object with its metadata and validation state."""
+
+    obj: T | str | md.EntryPoint
+    metadata: dict[str, Any] = field(default_factory=dict)
+    validated: bool = False
+
+
+# ────────────────────────────────────────────────────────────────────────
 # Generic Registry
 # ────────────────────────────────────────────────────────────────────────
 
@@ -86,11 +102,32 @@ class Registry(Generic[T]):
             str, dict[str, Any]
         ] = {}  # Store metadata for each registered item
         self._validator = validator  # Custom validation function
+        self._validated: set[str] = set()  # Track which aliases have been validated
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Registration helpers (decorator or direct call)
     # ------------------------------------------------------------------
+
+    @overload
+    def register(
+        self,
+        *aliases: str,
+        lazy: None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Callable[[T], T]:
+        """Register as decorator: @registry.register("foo")."""
+        ...
+
+    @overload
+    def register(
+        self,
+        *aliases: str,
+        lazy: str | md.EntryPoint,
+        metadata: dict[str, Any] | None = None,
+    ) -> Callable[[Any], Any]:
+        """Register lazy: registry.register("foo", lazy="a.b:C")(None)."""
+        ...
 
     def register(
         self,
@@ -114,13 +151,33 @@ class Registry(Generic[T]):
             with self._lock:
                 for alias in _aliases:
                     if alias in self._objects:
-                        # If it's a lazy placeholder being replaced by the concrete object, allow it
                         existing = self._objects[alias]
-                        if isinstance(existing, (str, md.EntryPoint)) and isinstance(
-                            target, type
+
+                        # Case 1: Replacing lazy placeholder with concrete object
+                        if isinstance(
+                            existing, (str, md.EntryPoint)
+                        ) and not isinstance(target, (str, md.EntryPoint)):
+                            # Materialize existing to verify compatibility
+                            existing_concrete = self._materialise(existing)
+                            if isinstance(target, type) and target != existing_concrete:
+                                raise ValueError(
+                                    f"{self._name!r} '{alias}' already registered with different class. "
+                                    f"Existing: {existing_concrete}, New: {target}"
+                                )
+                        # Case 2: Both are lazy placeholders
+                        elif isinstance(existing, (str, md.EntryPoint)) and isinstance(
+                            target, (str, md.EntryPoint)
                         ):
-                            # Allow replacing lazy placeholder with concrete class
-                            pass
+                            # Materialize both to compare
+                            existing_concrete = self._materialise(existing)
+                            target_concrete = self._materialise(target)
+                            if existing_concrete != target_concrete:
+                                raise ValueError(
+                                    f"{self._name!r} '{alias}' already registered with different lazy target. "
+                                    f"Existing: {existing} -> {existing_concrete}, "
+                                    f"New: {target} -> {target_concrete}"
+                                )
+                        # Case 3: Concrete already registered
                         else:
                             raise ValueError(
                                 f"{self._name!r} '{alias}' already registered "
@@ -161,35 +218,13 @@ class Registry(Generic[T]):
             items: Dictionary mapping aliases to objects/lazy paths
             metadata: Optional dictionary mapping aliases to metadata
         """
-        with self._lock:
-            for alias, target in items.items():
-                if alias in self._objects:
-                    # If it's a lazy placeholder being replaced by the concrete object, allow it
-                    existing = self._objects[alias]
-                    if isinstance(existing, (str, md.EntryPoint)) and isinstance(
-                        target, type
-                    ):
-                        # Allow replacing lazy placeholder with concrete class
-                        pass
-                    else:
-                        raise ValueError(
-                            f"{self._name!r} '{alias}' already registered "
-                            f"({self._objects[alias]})"
-                        )
-
-                # Eager type check only when we have a concrete class
-                if self._base_cls is not None and isinstance(target, type):
-                    if not issubclass(target, self._base_cls):  # type: ignore[arg-type]
-                        raise TypeError(
-                            f"{target} must inherit from {self._base_cls} "
-                            f"to be registered as a {self._name}"
-                        )
-
-                self._objects[alias] = target
-
-                # Store metadata if provided
-                if metadata and alias in metadata:
-                    self._metadata[alias] = metadata[alias]
+        for alias, target in items.items():
+            meta = metadata.get(alias, {}) if metadata else {}
+            # For lazy registration, check if it's a string or EntryPoint
+            if isinstance(target, (str, md.EntryPoint)):
+                self.register(alias, lazy=target, metadata=meta)(None)
+            else:
+                self.register(alias, metadata=meta)(target)
 
     # ------------------------------------------------------------------
     # Lookup & materialisation
@@ -211,6 +246,13 @@ class Registry(Generic[T]):
         return target  # concrete already
 
     def get(self, alias: str) -> T:
+        # Fast path: check if already materialized without lock
+        target = self._objects.get(alias)
+        if target is not None and not isinstance(target, (str, md.EntryPoint)):
+            # Already materialized and validated, return immediately
+            return target
+
+        # Slow path: acquire lock for materialization
         with self._lock:
             try:
                 target = self._objects[alias]
@@ -220,15 +262,16 @@ class Registry(Generic[T]):
                     f"{', '.join(self._objects)}"
                 ) from exc
 
-            # Only materialize if it's a string or EntryPoint (lazy placeholder)
-            if isinstance(target, (str, md.EntryPoint)):
-                concrete: T = self._materialise(target)
-                # First‑touch: swap placeholder with concrete obj for future calls
-                if concrete is not target:
-                    self._objects[alias] = concrete
-            else:
-                # Already materialized, just return it
-                concrete = target
+            # Double-check after acquiring lock (may have been materialized by another thread)
+            if not isinstance(target, (str, md.EntryPoint)):
+                return target
+
+            # Materialize the lazy placeholder
+            concrete: T = self._materialise(target)
+
+            # Swap placeholder with concrete object
+            if concrete is not target:
+                self._objects[alias] = concrete
 
             # Late type check (for placeholders)
             if self._base_cls is not None and not issubclass(concrete, self._base_cls):  # type: ignore[arg-type]
@@ -237,12 +280,14 @@ class Registry(Generic[T]):
                     f"(registered under alias '{alias}')"
                 )
 
-            # Custom validation
-            if self._validator is not None and not self._validator(concrete):
-                raise ValueError(
-                    f"{concrete} failed custom validation for {self._name} registry "
-                    f"(registered under alias '{alias}')"
-                )
+            # Custom validation - run only once per alias
+            if self._validator is not None and alias not in self._validated:
+                if not self._validator(concrete):
+                    raise ValueError(
+                        f"{concrete} failed custom validation for {self._name} registry "
+                        f"(registered under alias '{alias}')"
+                    )
+                self._validated.add(alias)
 
             return concrete
 
@@ -301,7 +346,11 @@ class Registry(Generic[T]):
                 raise RuntimeError("Cannot clear a frozen registry")
             self._objects.clear()
             self._metadata.clear()
-            self._materialise.cache_clear()  # type: ignore[attr-defined] # Added by lru_cache
+            self._validated.clear()
+            # Clear cache and create new materialise method to avoid stale references
+            self._materialise.cache_clear()  # type: ignore[attr-defined]
+            # Replace the method to ensure no lingering references
+            self._materialise = lru_cache(maxsize=256)(self._materialise.__wrapped__)  # type: ignore[attr-defined]
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -327,7 +376,7 @@ class MetricSpec:
 from lm_eval.api.model import LM  # noqa: E402
 
 
-model_registry: Registry[type[LM]] = Registry("model", base_cls=LM)
+model_registry: Registry[LM] = Registry("model", base_cls=LM)
 task_registry: Registry[Callable[..., Any]] = Registry("task")
 metric_registry: Registry[MetricSpec] = Registry("metric")
 metric_agg_registry: Registry[Callable[[Iterable[Any]], Mapping[str, float]]] = (
@@ -346,6 +395,29 @@ DEFAULT_METRIC_REGISTRY = {
     "multiple_choice": ["acc", "acc_norm"],
     "generate_until": ["exact_match"],
 }
+
+
+def default_metrics_for(output_type: str) -> list[str]:
+    """Get default metrics for a given output type dynamically.
+
+    This walks the metric registry to find metrics that match the output type.
+    Falls back to DEFAULT_METRIC_REGISTRY if no dynamic matches found.
+    """
+    # First check static defaults
+    if output_type in DEFAULT_METRIC_REGISTRY:
+        return DEFAULT_METRIC_REGISTRY[output_type]
+
+    # Walk metric registry for matching output types
+    matching_metrics = []
+    for name, metric_spec in metric_registry.items():
+        if (
+            isinstance(metric_spec, MetricSpec)
+            and metric_spec.output_type == output_type
+        ):
+            matching_metrics.append(name)
+
+    return matching_metrics if matching_metrics else []
+
 
 # Aggregation registry (will be populated by register_aggregation)
 AGGREGATION_REGISTRY: dict[str, Callable] = {}
@@ -373,35 +445,39 @@ def register_metric(**kwargs):
         if not metric_name:
             raise ValueError("metric name is required")
 
+        # Determine aggregation function
+        aggregate_fn = None
+        if "aggregation" in kwargs:
+            agg_name = kwargs["aggregation"]
+            if agg_name in AGGREGATION_REGISTRY:
+                aggregate_fn = AGGREGATION_REGISTRY[agg_name]
+            else:
+                raise ValueError(f"Unknown aggregation: {agg_name}")
+        else:
+            # No aggregation specified - use a function that raises NotImplementedError
+            def not_implemented_agg(values):
+                raise NotImplementedError(
+                    f"No aggregation function specified for metric '{metric_name}'. "
+                    "Please specify an 'aggregation' parameter."
+                )
+
+            aggregate_fn = not_implemented_agg
+
         # Create MetricSpec with the function and metadata
         spec = MetricSpec(
             compute=fn,
-            aggregate=lambda x: {},  # Default aggregation returns empty dict
+            aggregate=aggregate_fn,
             higher_is_better=kwargs.get("higher_is_better", True),
             output_type=kwargs.get("output_type"),
             requires=kwargs.get("requires"),
         )
 
-        # Register in metric registry
-        metric_registry._objects[metric_name] = spec
+        # Use proper registry API with metadata
+        metric_registry.register(metric_name, metadata=kwargs)(spec)
 
-        # Also handle aggregation if specified
-        if "aggregation" in kwargs:
-            agg_name = kwargs["aggregation"]
-            # Try to get aggregation from AGGREGATION_REGISTRY
-            if agg_name in AGGREGATION_REGISTRY:
-                spec = MetricSpec(
-                    compute=fn,
-                    aggregate=AGGREGATION_REGISTRY[agg_name],
-                    higher_is_better=kwargs.get("higher_is_better", True),
-                    output_type=kwargs.get("output_type"),
-                    requires=kwargs.get("requires"),
-                )
-                metric_registry._objects[metric_name] = spec
-
-        # Handle higher_is_better registry
+        # Also register in higher_is_better registry if specified
         if "higher_is_better" in kwargs:
-            higher_is_better_registry._objects[metric_name] = kwargs["higher_is_better"]
+            higher_is_better_registry.register(metric_name)(kwargs["higher_is_better"])
 
         return fn
 
@@ -444,14 +520,18 @@ register_metric_aggregation = metric_agg_registry.register
 def get_metric_aggregation(metric_name: str):
     """Get the aggregation function for a metric."""
     # First try to get from metric registry (for metrics registered with aggregation)
-    if metric_name in metric_registry._objects:
-        metric_spec = metric_registry._objects[metric_name]
+    try:
+        metric_spec = metric_registry.get(metric_name)
         if isinstance(metric_spec, MetricSpec) and metric_spec.aggregate:
             return metric_spec.aggregate
+    except KeyError:
+        pass  # Try next registry
 
     # Fall back to metric_agg_registry (for standalone aggregations)
-    if metric_name in metric_agg_registry._objects:
-        return metric_agg_registry._objects[metric_name]
+    try:
+        return metric_agg_registry.get(metric_name)
+    except KeyError:
+        pass
 
     # If not found, raise error
     raise KeyError(
@@ -468,18 +548,27 @@ get_filter = filter_registry.get
 
 # Special handling for AGGREGATION_REGISTRY which works differently
 def register_aggregation(name: str):
+    """@deprecated Use metric_agg_registry.register() instead."""
+    warnings.warn(
+        "register_aggregation() is deprecated. Use metric_agg_registry.register() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     def decorate(fn):
         if name in AGGREGATION_REGISTRY:
             raise ValueError(
                 f"aggregation named '{name}' conflicts with existing registered aggregation!"
             )
         AGGREGATION_REGISTRY[name] = fn
+        # Also register in the new registry for compatibility
+        metric_agg_registry.register(name)(fn)
         return fn
 
     return decorate
 
 
-def get_aggregation(name: str) -> Callable[[], dict[str, Callable]]:
+def get_aggregation(name: str) -> Callable[[], dict[str, Callable]] | None:
     try:
         return AGGREGATION_REGISTRY[name]
     except KeyError:
@@ -523,18 +612,26 @@ def freeze_all() -> None:  # pragma: no cover
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Backwards‑compatibility read‑only globals
+# Backwards‑compatibility read‑only globals with mutation warnings
 # ────────────────────────────────────────────────────────────────────────
 
-MODEL_REGISTRY: Mapping[str, type[LM]] = MappingProxyType(model_registry._objects)  # type: ignore[attr-defined]
+
+# Note: MappingProxyType cannot be subclassed, so we use dict copies for immutability
+
+
+MODEL_REGISTRY: Mapping[str, LM] = MappingProxyType(dict(model_registry._objects))  # type: ignore[attr-defined]
 TASK_REGISTRY: Mapping[str, Callable[..., Any]] = MappingProxyType(
-    task_registry._objects
+    dict(task_registry._objects)
 )  # type: ignore[attr-defined]
-METRIC_REGISTRY: Mapping[str, MetricSpec] = MappingProxyType(metric_registry._objects)  # type: ignore[attr-defined]
+METRIC_REGISTRY: Mapping[str, MetricSpec] = MappingProxyType(
+    dict(metric_registry._objects)
+)  # type: ignore[attr-defined]
 METRIC_AGGREGATION_REGISTRY: Mapping[str, Callable] = MappingProxyType(
-    metric_agg_registry._objects
+    dict(metric_agg_registry._objects)
 )  # type: ignore[attr-defined]
 HIGHER_IS_BETTER_REGISTRY: Mapping[str, bool] = MappingProxyType(
-    higher_is_better_registry._objects
+    dict(higher_is_better_registry._objects)
 )  # type: ignore[attr-defined]
-FILTER_REGISTRY: Mapping[str, Callable] = MappingProxyType(filter_registry._objects)  # type: ignore[attr-defined]
+FILTER_REGISTRY: Mapping[str, Callable] = MappingProxyType(
+    dict(filter_registry._objects)
+)  # type: ignore[attr-defined]
