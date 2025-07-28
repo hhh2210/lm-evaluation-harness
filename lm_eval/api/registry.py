@@ -208,24 +208,24 @@ class Registry(Generic[T]):
 
         return decorator
 
-    def register_bulk(
-        self,
-        items: dict[str, T | str | md.EntryPoint],
-        metadata: dict[str, dict[str, Any]] | None = None,
-    ) -> None:
-        """Register multiple items at once.
-
-        Args:
-            items: Dictionary mapping aliases to objects/lazy paths
-            metadata: Optional dictionary mapping aliases to metadata
-        """
-        for alias, target in items.items():
-            meta = metadata.get(alias, {}) if metadata else {}
-            # For lazy registration, check if it's a string or EntryPoint
-            if isinstance(target, (str, md.EntryPoint)):
-                self.register(alias, lazy=target, metadata=meta)(None)
-            else:
-                self.register(alias, metadata=meta)(target)
+    # def register_bulk(
+    #     self,
+    #     items: dict[str, T | str | md.EntryPoint],
+    #     metadata: dict[str, dict[str, Any]] | None = None,
+    # ) -> None:
+    #     """Register multiple items at once.
+    #
+    #     Args:
+    #         items: Dictionary mapping aliases to objects/lazy paths
+    #         metadata: Optional dictionary mapping aliases to metadata
+    #     """
+    #     for alias, target in items.items():
+    #         meta = metadata.get(alias, {}) if metadata else {}
+    #         # For lazy registration, check if it's a string or EntryPoint
+    #         if isinstance(target, (str, md.EntryPoint)):
+    #             self.register(alias, lazy=target, metadata=meta)(None)
+    #         else:
+    #             self.register(alias, metadata=meta)(target)
 
     # ------------------------------------------------------------------
     # Lookup & materialisation
