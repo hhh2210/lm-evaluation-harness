@@ -88,7 +88,6 @@ class Registry(Generic[T]):
             str, dict[str, Any]
         ] = {}  # Store metadata for each registered item
         self._validator = validator  # Custom validation function
-        self._validated: set[str] = set()  # Track which aliases have been validated
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
@@ -138,36 +137,11 @@ class Registry(Generic[T]):
                 for alias in _aliases:
                     if alias in self._objects:
                         existing = self._objects[alias]
-
-                        # Case 1: Replacing lazy placeholder with concrete object
-                        if isinstance(
-                            existing, (str, md.EntryPoint)
-                        ) and not isinstance(target, (str, md.EntryPoint)):
-                            # Materialize existing to verify compatibility
-                            existing_concrete = self._materialise(existing)
-                            if isinstance(target, type) and target != existing_concrete:
-                                raise ValueError(
-                                    f"{self._name!r} '{alias}' already registered with different class. "
-                                    f"Existing: {existing_concrete}, New: {target}"
-                                )
-                        # Case 2: Both are lazy placeholders
-                        elif isinstance(existing, (str, md.EntryPoint)) and isinstance(
-                            target, (str, md.EntryPoint)
-                        ):
-                            # Materialize both to compare
-                            existing_concrete = self._materialise(existing)
-                            target_concrete = self._materialise(target)
-                            if existing_concrete != target_concrete:
-                                raise ValueError(
-                                    f"{self._name!r} '{alias}' already registered with different lazy target. "
-                                    f"Existing: {existing} -> {existing_concrete}, "
-                                    f"New: {target} -> {target_concrete}"
-                                )
-                        # Case 3: Concrete already registered
-                        else:
+                        # Allow re-registration only if identical
+                        if existing != target:
                             raise ValueError(
                                 f"{self._name!r} '{alias}' already registered "
-                                f"({self._objects[alias]})"
+                                f"(existing: {existing}, new: {target})"
                             )
                     # Eager type check only when we have a concrete class
                     if self._base_cls is not None and isinstance(target, type):
@@ -266,14 +240,12 @@ class Registry(Generic[T]):
                     f"(registered under alias '{alias}')"
                 )
 
-            # Custom validation - run only once per alias
-            if self._validator is not None and alias not in self._validated:
-                if not self._validator(concrete):
-                    raise ValueError(
-                        f"{concrete} failed custom validation for {self._name} registry "
-                        f"(registered under alias '{alias}')"
-                    )
-                self._validated.add(alias)
+            # Custom validation - run on materialization
+            if self._validator and not self._validator(concrete):
+                raise ValueError(
+                    f"{concrete} failed custom validation for {self._name} registry "
+                    f"(registered under alias '{alias}')"
+                )
 
             return concrete
 
@@ -332,7 +304,6 @@ class Registry(Generic[T]):
                 raise RuntimeError("Cannot clear a frozen registry")
             self._objects.clear()
             self._metadata.clear()
-            self._validated.clear()
             # Clear cache and create new materialise method to avoid stale references
             self._materialise.cache_clear()  # type: ignore[attr-defined]
             # Replace the method to ensure no lingering references
