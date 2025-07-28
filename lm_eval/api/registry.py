@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Callable, Generic, Type, TypeVar, Union, cast
+from typing import Any, Callable, Generic, TypeVar, Union, cast
 
 
 try:
@@ -15,7 +15,6 @@ try:
 except ImportError:  # pragma: no cover – fallback for 3.8/3.9
     import importlib_metadata as md  # type: ignore
 
-# Legacy exports (keep for one release, then drop)
 LEGACY_EXPORTS = [
     "DEFAULT_METRIC_REGISTRY",
     "AGGREGATION_REGISTRY",
@@ -52,9 +51,8 @@ __all__ = [
     "higher_is_better_registry",
     "filter_registry",
     "freeze_all",
-    # legacy
     *LEGACY_EXPORTS,
-]
+]  # type: ignore
 
 T = TypeVar("T")
 Placeholder = Union[str, md.EntryPoint]  # light‑weight lazy token
@@ -72,11 +70,11 @@ class Registry(Generic[T]):
         self,
         name: str,
         *,
-        base_cls: Union[Type[T], None] = None,
+        base_cls: type[T] | None = None,
     ) -> None:
         self._name = name
         self._base_cls = base_cls
-        self._objs: dict[str, Union[T, Placeholder]] = {}
+        self._objs: dict[str, T | Placeholder] = {}
         self._meta: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
@@ -87,12 +85,12 @@ class Registry(Generic[T]):
     def register(
         self,
         *aliases: str,
-        lazy: Union[T, Placeholder, None] = None,
+        lazy: T | Placeholder | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Callable[[T], T]:
         """``@reg.register('foo')`` or ``reg.register('foo', lazy='pkg.mod:Obj')``."""
 
-        def _store(alias: str, target: Union[T, Placeholder]) -> None:
+        def _store(alias: str, target: T | Placeholder) -> None:
             current = self._objs.get(alias)
             # ─── collision handling ────────────────────────────────────
             if current is not None and current != target:
@@ -104,7 +102,7 @@ class Registry(Generic[T]):
                         self._meta[alias] = metadata or {}
                         return
                 raise ValueError(
-                    f"{self._name!r} alias '{alias}' already registered ("  # noqa: B950
+                    f"{self._name!r} alias '{alias}' already registered ("
                     f"existing={current}, new={target})"
                 )
             # ─── type check for concrete classes ───────────────────────
@@ -178,26 +176,26 @@ class Registry(Generic[T]):
     # Mapping helpers
     # ------------------------------------------------------------------
 
-    def __getitem__(self, alias: str) -> T:  # noqa: DunderImplemented
+    def __getitem__(self, alias: str) -> T:
         return self.get(alias)
 
-    def __iter__(self):  # noqa: DunderImplemented
+    def __iter__(self):
         return iter(self._objs)
 
-    def __len__(self):  # noqa: DunderImplemented
+    def __len__(self):
         return len(self._objs)
 
-    def items(self):  # noqa: DunderImplemented
+    def items(self):
         return self._objs.items()
 
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 
-    def metadata(self, alias: str) -> Union[Mapping[str, Any], None]:
+    def metadata(self, alias: str) -> Mapping[str, Any] | None:
         return self._meta.get(alias)
 
-    def origin(self, alias: str) -> Union[str, None]:
+    def origin(self, alias: str) -> str | None:
         obj = self._objs.get(alias)
         if isinstance(obj, (str, md.EntryPoint)):
             return None
@@ -232,8 +230,8 @@ class MetricSpec:
     compute: Callable[[Any, Any], Any]
     aggregate: Callable[[Iterable[Any]], float]
     higher_is_better: bool = True
-    output_type: Union[str, None] = None
-    requires: Union[list[str], None] = None
+    output_type: str | None = None
+    requires: list[str] | None = None
 
 
 # ────────────────────────────────────────────────────────────────────────
