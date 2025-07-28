@@ -5,7 +5,7 @@ import inspect
 import threading
 import warnings
 from collections.abc import Iterable, Mapping, MutableMapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
 from typing import (
@@ -60,20 +60,6 @@ __all__ = [
 ]
 
 T = TypeVar("T")
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Registry Entry for bundling object + metadata
-# ────────────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class RegistryEntry(Generic[T]):
-    """Bundle an object with its metadata and validation state."""
-
-    obj: T | str | md.EntryPoint
-    metadata: dict[str, Any] = field(default_factory=dict)
-    validated: bool = False
 
 
 # ────────────────────────────────────────────────────────────────────────
