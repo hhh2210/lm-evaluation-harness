@@ -14,6 +14,7 @@ from typing import (
     Callable,
     Generic,
     TypeVar,
+    cast,
 )
 
 
@@ -22,19 +23,8 @@ try:  # Python≥3.10
 except ImportError:  # pragma: no cover - fallback for 3.8/3.9 runtimes
     import importlib_metadata as md  # type: ignore
 
-__all__ = [
-    "Registry",
-    "MetricSpec",
-    # concrete registries
-    "model_registry",
-    "task_registry",
-    "metric_registry",
-    "metric_agg_registry",
-    "higher_is_better_registry",
-    "filter_registry",
-    # helper
-    "freeze_all",
-    # Legacy compatibility
+# Legacy exports (keep for one release, then drop)
+LEGACY_EXPORTS = [
     "DEFAULT_METRIC_REGISTRY",
     "AGGREGATION_REGISTRY",
     "register_model",
@@ -57,6 +47,21 @@ __all__ = [
     "METRIC_AGGREGATION_REGISTRY",
     "HIGHER_IS_BETTER_REGISTRY",
     "FILTER_REGISTRY",
+]
+
+__all__ = [
+    # canonical
+    "Registry",
+    "MetricSpec",
+    "model_registry",
+    "task_registry",
+    "metric_registry",
+    "metric_agg_registry",
+    "higher_is_better_registry",
+    "filter_registry",
+    "freeze_all",
+    # legacy
+    *LEGACY_EXPORTS,
 ]
 
 T = TypeVar("T")
@@ -205,51 +210,6 @@ class Registry(Generic[T]):
         # decorator call → return function that will later receive the object
         return _impl
 
-    # def register(
-    #     self,
-    #     *aliases: str,
-    #     lazy: str | md.EntryPoint | None = None,
-    #     metadata: dict[str, Any] | None = None,
-    # ) -> Callable[[T], T]:
-    #     """``@registry.register("foo")`` **or** ``registry.register("foo", lazy="a.b:C")``.
-    #
-    #     * If called as a **decorator**, supply an object and *no* ``lazy``.
-    #     * If called as a **plain function** and you want lazy import, leave the
-    #       object out and pass ``lazy=``.
-    #     """
-    #     # ─── direct‑call path with lazy placeholder ───
-    #     if lazy is not None:
-    #         for alias in self._resolve_aliases(lazy, aliases):
-    #             self._check_and_store(alias, lazy, metadata)
-    #         return lambda x: x  # no‑op decorator for accidental use
-    #
-    #     # ─── decorator path ───
-    #     def decorator(obj: T) -> T:  # type: ignore[valid-type]
-    #         for alias in self._resolve_aliases(obj, aliases):
-    #             self._check_and_store(alias, obj, metadata)
-    #         return obj
-    #
-    #     return decorator
-
-    # def register_bulk(
-    #     self,
-    #     items: dict[str, T | str | md.EntryPoint],
-    #     metadata: dict[str, dict[str, Any]] | None = None,
-    # ) -> None:
-    #     """Register multiple items at once.
-    #
-    #     Args:
-    #         items: Dictionary mapping aliases to objects/lazy paths
-    #         metadata: Optional dictionary mapping aliases to metadata
-    #     """
-    #     for alias, target in items.items():
-    #         meta = metadata.get(alias, {}) if metadata else {}
-    #         # For lazy registration, check if it's a string or EntryPoint
-    #         if isinstance(target, (str, md.EntryPoint)):
-    #             self.register(alias, lazy=target, metadata=meta)(None)
-    #         else:
-    #             self.register(alias, metadata=meta)(target)
-
     # ------------------------------------------------------------------
     # Lookup & materialisation
     # ------------------------------------------------------------------
@@ -264,9 +224,9 @@ class Registry(Generic[T]):
                     f"Lazy path '{target}' must be in 'module:object' form"
                 )
             module = importlib.import_module(mod)
-            return getattr(module, obj_name)
+            return cast(T, getattr(module, obj_name))
         if isinstance(target, md.EntryPoint):
-            return target.load()
+            return cast(T, target.load())
         return target  # concrete already
 
     def get(self, alias: str) -> T:
@@ -471,7 +431,7 @@ def register_metric(**kwargs):
             raise ValueError("metric name is required")
 
         # Determine aggregation function
-        aggregate_fn = None
+        aggregate_fn: Callable[[Iterable[Any]], Mapping[str, float]] | None = None
         if "aggregation" in kwargs:
             agg_name = kwargs["aggregation"]
             try:
@@ -498,11 +458,11 @@ def register_metric(**kwargs):
         )
 
         # Use a proper registry API with metadata
-        metric_registry.register(metric_name, metadata=kwargs)(spec)
+        metric_registry.register(metric_name, metadata=kwargs)(spec)  # type: ignore[misc]
 
         # Also register in higher_is_better registry if specified
         if "higher_is_better" in kwargs:
-            higher_is_better_registry.register(metric_name)(kwargs["higher_is_better"])
+            higher_is_better_registry.register(metric_name)(kwargs["higher_is_better"])  # type: ignore[misc]
 
         return fn
 
@@ -542,7 +502,9 @@ def get_metric(name: str, hf_evaluate_metric=False):
 register_metric_aggregation = metric_agg_registry.register
 
 
-def get_metric_aggregation(metric_name: str):
+def get_metric_aggregation(
+    metric_name: str,
+) -> Callable[[Iterable[Any]], Mapping[str, float]]:
     """Get the aggregation function for a metric."""
     # First, try to get from the metric registry (for metrics registered with aggregation)
     try:
@@ -586,7 +548,7 @@ def register_aggregation(name: str):
             raise ValueError(
                 f"aggregation named '{name}' conflicts with existing registered aggregation!"
             )
-        metric_agg_registry.register(name)(fn)
+        metric_agg_registry.register(name)(fn)  # type: ignore[misc]
         return fn
 
     return decorate
