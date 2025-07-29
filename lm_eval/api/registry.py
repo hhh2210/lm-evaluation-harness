@@ -9,6 +9,8 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Callable, Generic, TypeVar, Union, cast
 
+from lm_eval.api.filter import Filter
+
 
 try:
     import importlib.metadata as md  # Python ≥3.10
@@ -58,11 +60,6 @@ T = TypeVar("T")
 Placeholder = Union[str, md.EntryPoint]  # light‑weight lazy token
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Module-level cache for materializing placeholders (prevents memory leak)
-# ────────────────────────────────────────────────────────────────────────
-
-
 @lru_cache(maxsize=16)
 def _materialise_placeholder(ph: Placeholder) -> Any:
     """Materialize a lazy placeholder into the actual object.
@@ -77,17 +74,9 @@ def _materialise_placeholder(ph: Placeholder) -> Any:
     return ph.load()
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Metric-specific metadata storage
-# ────────────────────────────────────────────────────────────────────────
-
+# Metric-specific metadata storage --------------------------------------------
 
 _metric_meta: dict[str, dict[str, Any]] = {}
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Generic Registry
-# ────────────────────────────────────────────────────────────────────────
 
 
 class Registry(Generic[T]):
@@ -104,9 +93,7 @@ class Registry(Generic[T]):
         self._objs: dict[str, T | Placeholder] = {}
         self._lock = threading.RLock()
 
-    # ------------------------------------------------------------------
-    # Registration (decorator or direct call)
-    # ------------------------------------------------------------------
+    # Registration (decorator or direct call) --------------------------------------
 
     def register(
         self,
@@ -117,7 +104,7 @@ class Registry(Generic[T]):
 
         def _store(alias: str, target: T | Placeholder) -> None:
             current = self._objs.get(alias)
-            # ─── collision handling ────────────────────────────────────
+            # collision handling ------------------------------------------
             if current is not None and current != target:
                 # allow placeholder → real object upgrade
                 if isinstance(current, str) and isinstance(target, type):
@@ -129,7 +116,7 @@ class Registry(Generic[T]):
                     f"{self._name!r} alias '{alias}' already registered ("
                     f"existing={current}, new={target})"
                 )
-            # ─── type check for concrete classes ───────────────────────
+            # type check for concrete classes ----------------------------------------------
             if self._base_cls is not None and isinstance(target, type):
                 if not issubclass(target, self._base_cls):  # type: ignore[arg-type]
                     raise TypeError(
@@ -155,9 +142,7 @@ class Registry(Generic[T]):
 
         return decorator
 
-    # ------------------------------------------------------------------
-    # Lookup & materialisation
-    # ------------------------------------------------------------------
+    # Lookup & materialisation --------------------------------------------------
 
     def _materialise(self, ph: Placeholder) -> T:
         """Materialize a placeholder using the module-level cached function."""
@@ -191,10 +176,6 @@ class Registry(Generic[T]):
             )
         return target
 
-    # ------------------------------------------------------------------
-    # Mapping helpers
-    # ------------------------------------------------------------------
-
     def __getitem__(self, alias: str) -> T:
         return self.get(alias)
 
@@ -207,9 +188,7 @@ class Registry(Generic[T]):
     def items(self):
         return self._objs.items()
 
-    # ------------------------------------------------------------------
-    # Utilities
-    # ------------------------------------------------------------------
+    # Utilities -------------------------------------------------------------
 
     def origin(self, alias: str) -> str | None:
         obj = self._objs.get(alias)
@@ -226,17 +205,14 @@ class Registry(Generic[T]):
         with self._lock:
             self._objs = MappingProxyType(dict(self._objs))  # type: ignore[assignment]
 
-    # Test helper -------------------------------------------------------------
-
+    # Test helper --------------------------------
     def _clear(self):  # pragma: no cover
         """Erase registry (for isolated tests)."""
         self._objs.clear()
         _materialise_placeholder.cache_clear()
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Structured object for metrics
-# ────────────────────────────────────────────────────────────────────────
+# Structured object for metrics ------------------
 
 
 @dataclass(frozen=True)
@@ -248,9 +224,7 @@ class MetricSpec:
     requires: list[str] | None = None
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Canonical registries
-# ────────────────────────────────────────────────────────────────────────
+# Canonical registries aliases ---------------------
 
 from lm_eval.api.model import LM  # noqa: E402
 
@@ -264,7 +238,7 @@ metric_agg_registry: Registry[Callable[[Iterable[Any]], float]] = Registry(
     "metric aggregation"
 )
 higher_is_better_registry: Registry[bool] = Registry("higher‑is‑better flag")
-filter_registry: Registry[Callable] = Registry("filter")
+filter_registry: Registry[type[Filter]] = Registry("filter")
 
 # Public helper aliases ------------------------------------------------------
 
@@ -342,8 +316,6 @@ get_aggregation = metric_agg_registry.get
 DEFAULT_METRIC_REGISTRY = metric_registry
 AGGREGATION_REGISTRY = metric_agg_registry
 
-# Convenience ----------------------------------------------------------------
-
 
 def freeze_all():
     for r in (
@@ -357,11 +329,11 @@ def freeze_all():
         r.freeze()
 
 
-# Backwards‑compat read‑only aliases ----------------------------------------
+# Backwards‑compat aliases ----------------------------------------
 
-MODEL_REGISTRY = model_registry  # type: ignore
-TASK_REGISTRY = task_registry  # type: ignore
-METRIC_REGISTRY = metric_registry  # type: ignore
-METRIC_AGGREGATION_REGISTRY = metric_agg_registry  # type: ignore
-HIGHER_IS_BETTER_REGISTRY = higher_is_better_registry  # type: ignore
-FILTER_REGISTRY = filter_registry  # type: ignore
+MODEL_REGISTRY = model_registry
+TASK_REGISTRY = task_registry
+METRIC_REGISTRY = metric_registry
+METRIC_AGGREGATION_REGISTRY = metric_agg_registry
+HIGHER_IS_BETTER_REGISTRY = higher_is_better_registry
+FILTER_REGISTRY = filter_registry
